@@ -23,16 +23,17 @@ def make_req (url):
 
 
 def read_val(value):
-    if value == "–":
+    if value == "–" or value == "-":
         return None
-    elif '%' in value:
+    if '%' in value:
         return read_val(value.replace('%', ''))
-    elif '.' in value:
-        return float(value)
-    elif value.isnumeric():
-        return int(value)
-    else:
-        return value
+    
+    try: return int(value.replace(',', ''))
+    except ValueError: pass
+    try: return float(value.replace(',', ''))
+    except ValueError: pass
+            
+    return value
 
 def get_text(soup_list, separator):
     return separator.join(map(lambda x: x.get_text(), soup_list))
@@ -42,6 +43,42 @@ def print_err(str):
 
 def clean_str(str):
     return str.replace('\n', ' ')
+
+def get_table_data(elem):
+    words = elem.get_text()
+    if words != "":
+        return words
+    child = elem.contents[0]
+    if child.name == 'img':
+        return child["src"]
+    return None
+
+def digest_table(table_headings, table_data):
+    headings = map(lambda th: th.get_text(), table_headings.find_all('th'))
+    data = map(lambda td: get_table_data(td), table_data.find_all('td'))
+    return dict(zip(headings, data))
+
+def get_all_text_upto_elem(elem_start, end_tag):
+    following_text = []
+
+    for sibling in elem_start.next_siblings:
+        if sibling.name == end_tag:
+            break
+        next_text = sibling.get_text()
+        if next_text != "": following_text.append(next_text)
+
+    # Remove breaks and only break at \n
+    return list(filter(len, "".join(following_text).split("\n")))
+
+def stats_breakdown(str, stat_type):
+    keys = {
+        'damage': ['physical', 'magic', 'fire', 'lightning'],
+        'stats': ['strength', 'dexterity', 'intelligence', 'faith'],
+        'aux_effects': ['bleed', 'poison', 'divine', 'occult'],
+    }
+
+    stats = list(map(read_val, str.split("/")))
+    return dict(zip(keys[stat_type], stats))
 
 # ----- Scrapers -----
 
@@ -61,59 +98,111 @@ def scrape_weapon(name, href, weap_type):
 
     desc = weapon_soup.find('h2', string="In-Game Description")
     if desc is None:
-        desc = desc = weapon_soup.find('h2', string="In Game Description")
+        desc = weapon_soup.find('h2', string="In Game Description")
 
     if desc is not None:
         weapon['description'] = clean_str(desc.find_next_sibling().getText())
     else:
         print_err('NO DESCRIPTION FOR ' + name)
-        weapon['description'] = ""
+        weapon['description'] = None
 
     avail = weapon_soup.find('h2', string="Availability")
-    weapon['availability'] = avail.find_next_sibling().getText()
+    weapon['availability'] = get_all_text_upto_elem(avail, 'h2')
 
     info = weapon_soup.find('h2', string="General Information")
     after_info = info.find_next_sibling()
+
     if after_info.name == 'div' or after_info.name == 'p':
-        weapon['info'] = after_info.getText()
+        weapon['info'] = get_all_text_upto_elem(info, 'table')
     elif after_info.name == 'table':
-        weapon['info'] = ""
+        weapon['info'] = None
     else:
         print_err(name + " info err")
 
-    # Tabled base info
+    # Tabled base stats
 
+    table_headings = weapon_soup.find('th', string="Image").parent
+    table_data = table_headings.find_next_sibling()
+
+    gen_stats = digest_table(table_headings, table_data)
+
+    weapon['image'] = gen_stats['Image']
+    del gen_stats['Image']
+
+    def pop_gen_stat(key_js, key_html):
+        if key_html in gen_stats:
+            weapon[key_js] = read_val(gen_stats[key_html])
+            del gen_stats[key_html]
+        else:
+            weapon[key_js] = None
+
+    pop_gen_stat('critical', 'Critical')
+    pop_gen_stat('durability', 'Durability')
+    pop_gen_stat('weight', 'Weight')
+    pop_gen_stat('stability', 'Stability')
+    pop_gen_stat('frampt_souls', 'Frampt Souls')
+    pop_gen_stat('frampt_souls', 'Frampt\nSouls')
+
+    damage_parts = gen_stats['Damage'].split("\n\n")
+    if len(damage_parts) == 3:
+        damage, effects, damage_type = damage_parts
+    elif len(damage_parts) == 2:
+        damage, damage_type = damage_parts
+        effects = None
+    else:
+        print_err(name + " seems to have funky damage")
+
+    weapon['damage_type'] = damage_type.replace("(", "").replace(")", "")
+    weapon['damage_effects'] = effects
+    weapon['damage'] = [ stats_breakdown(damage, 'damage') ]
+    del gen_stats['Damage']
+
+    if "Stats Needed\nStat Bonuses" in gen_stats:
+        if '\n\n' in gen_stats["Stats Needed\nStat Bonuses"]:
+            stats_req, stats_bonus = gen_stats["Stats Needed\nStat Bonuses"].split('\n\n')
+            weapon['stats_required'] = stats_breakdown(stats_req, 'stats')
+            weapon['stats_bonus'] = [ stats_breakdown(stats_bonus, 'stats') ]
+            del gen_stats["Stats Needed\nStat Bonuses"]
+        elif '<br>' in gen_stats["Stats Needed\nStat Bonuses"]:
+            print('yaya', part1, part2)
+        else:
+            # FIXME: we get here on Jagged Ghost Blade and its weird annotations
+            print('ohnooo')
+    else:
+        weapon['stats_required'] = None
+        weapon['stats_bonus'] = None
+
+    if 'Damage\nReduction %' in gen_stats:
+        weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage\nReduction %"], 'damage')
+        del gen_stats['Damage\nReduction %']
+    elif 'Damage Reduction %' in gen_stats:
+        weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage Reduction %"], 'damage')
+        del gen_stats['Damage Reduction %']
+    else:
+        weapon['damage_reduction'] = stats_breakdown('-/-/-/-', 'damage')
+    
+    if 'Aux Effects' in gen_stats:
+        weapon['auxillary_effects'] = stats_breakdown(gen_stats["Aux Effects"], 'aux_effects')
+        del gen_stats["Aux Effects"]
+    else:
+        weapon['auxillary_effects'] = stats_breakdown('-/-/-/-', 'aux_effects')
+
+    if 'Critical Bonus' in gen_stats:
+        weapon['critical_bonus'] = read_val(gen_stats['Critical Bonus'])
+        del gen_stats['Critical Bonus']
+    elif 'Critical\nBonus' in gen_stats:
+        weapon['critical_bonus'] = read_val(gen_stats['Critical\nBonus'])
+        del gen_stats['Critical\nBonus']
+    else:
+        weapon['critical_bonus']: None
+
+    del gen_stats['Name']
+    if len(gen_stats):
+        print_err('More stats present in ' + name + ' - need to deal with the following:')
+        print(gen_stats)
 
     #  Upgrade Info
     
-    # # Weight, Stability, Durability, Critical
-    # fourth_containers = weapon_soup.select('div.fourth.container')
-    # for container in fourth_containers:
-    #     stat = container.h3.contents[0]
-    #     weapon[stat] = read_val(container.find('span', class_='num').contents[0])
-
-    # # Damage, Damage Reduction, Requirements, Auxiliary, Bonus
-    # third_containers = weapon_soup.select('div.third.container')
-    # damage_type_container = third_containers.pop()
-    # for container in third_containers:
-    #     stat_type = container.h3.contents[0].replace(' ', '_')
-    #     if stat_type == 'reduction':
-    #         stat_type = 'damage_reduction'
-    #     stats = container.find_all('span', class_='')
-    #     weapon[stat_type] = {}
-    #     for stat in stats:
-    #         stat_name = stat.contents[0]
-    #         if stat_name == 'normal':
-    #             stat_name = 'physical'
-    #         sibling = stat.find_previous_sibling('span', class_='num')
-    #         weapon[stat_type][stat_name] = read_val(sibling.contents[0])
-
-    # # Attack Type
-    # attack_types = damage_type_container.find_all('span', class_='num')
-    # attack_types_ok = filter(lambda x: int(re.findall('\d+', x.attrs['style'])[0]) > 1, attack_types)
-    # attack_types_desc = map(lambda x: x.find_next_sibling('span', class_=''), attack_types_ok)
-    # attack_type = get_text(attack_types_desc, '/')
-    # weapon['attack_type'] = attack_type
 
     # # Upgrades
     # upgrades = {}
@@ -158,19 +247,20 @@ def scrape_weapon_list(filename):
     page = make_req(url_base + "/weapons")
     soup = BeautifulSoup(page, 'html.parser')
 
-    weapon_div = soup.find('h2', string="All Weapons by Type").find_parent('td')
+    weapon_div = soup.find('h2', string="All Weapons by Type").parent
     all_types = weapon_div.find_all('h3')
 
     for type_heading in all_types:
-        type_title = type_heading.get_text()
+        type_title = type_heading.string
         weapons['_types'].append(type_title) 
 
         weap_list = type_heading.find_next_sibling().find_all('a')
         for weap_tag in weap_list:
-            name = weap_tag.get_text()
-            link = url_base + weap_tag.get('href')
-            total_weapon = scrape_weapon(name, link, type_title)
-            weapons['full_list'].append(total_weapon)
+            name = weap_tag.string
+            if name == "Jagged Ghost Blade":
+                link = url_base + weap_tag['href']
+                total_weapon = scrape_weapon(name, link, type_title)
+                weapons['full_list'].append(total_weapon)
 
 if __name__ == "__main__":
     print("Init scraping")
