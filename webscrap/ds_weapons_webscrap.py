@@ -94,6 +94,10 @@ def scrape_weapon(name, href, weap_type):
     weapon_page = make_req(weapon['href'])
     weapon_soup = BeautifulSoup(weapon_page, 'html.parser')
 
+    # Remove all footnotes
+    for sup in weapon_soup.find_all('sup'):
+        sup.decompose()
+
     # Description, Availability, Other Information
 
     desc = weapon_soup.find('h2', string="In-Game Description")
@@ -143,16 +147,25 @@ def scrape_weapon(name, href, weap_type):
     pop_gen_stat('frampt_souls', 'Frampt Souls')
     pop_gen_stat('frampt_souls', 'Frampt\nSouls')
 
-    damage_parts = gen_stats['Damage'].split("\n\n")
+    if "\n\n" in gen_stats['Damage']:
+        damage_parts = gen_stats['Damage'].split("\n\n")
+    elif "\n" in gen_stats['Damage']:
+        damage_parts = gen_stats['Damage'].split("\n")
+    else:
+        damage_parts = []
+    
     if len(damage_parts) == 3:
         damage, effects, damage_type = damage_parts
     elif len(damage_parts) == 2:
         damage, damage_type = damage_parts
         effects = None
     else:
-        print_err(name + " seems to have funky damage")
+        damage, effects, damage_type = [gen_stats['Damage'], None, None]
 
-    weapon['damage_type'] = damage_type.replace("(", "").replace(")", "")
+    if damage_type != None:
+        damage_type = damage_type.replace("(", "").replace(")", "")
+    
+    weapon['damage_type'] = damage_type
     weapon['damage_effects'] = effects
     weapon['damage'] = [ stats_breakdown(damage, 'damage') ]
     del gen_stats['Damage']
@@ -160,14 +173,16 @@ def scrape_weapon(name, href, weap_type):
     if "Stats Needed\nStat Bonuses" in gen_stats:
         if '\n\n' in gen_stats["Stats Needed\nStat Bonuses"]:
             stats_req, stats_bonus = gen_stats["Stats Needed\nStat Bonuses"].split('\n\n')
-            weapon['stats_required'] = stats_breakdown(stats_req, 'stats')
-            weapon['stats_bonus'] = [ stats_breakdown(stats_bonus, 'stats') ]
-            del gen_stats["Stats Needed\nStat Bonuses"]
-        elif '<br>' in gen_stats["Stats Needed\nStat Bonuses"]:
-            print('yaya', part1, part2)
+        elif '\n' in gen_stats["Stats Needed\nStat Bonuses"]:
+            stats_req, stats_bonus = gen_stats["Stats Needed\nStat Bonuses"].split('\n')
         else:
-            # FIXME: we get here on Jagged Ghost Blade and its weird annotations
-            print('ohnooo')
+            print_err('ohnooo we got stats problems on ' + name)
+            stats_req, stats_bonus = ["",""]
+        
+        weapon['stats_required'] = stats_breakdown(stats_req, 'stats')
+        weapon['stats_bonus'] = [ stats_breakdown(stats_bonus, 'stats') ]
+        del gen_stats["Stats Needed\nStat Bonuses"]
+            
     else:
         weapon['stats_required'] = None
         weapon['stats_bonus'] = None
@@ -178,6 +193,9 @@ def scrape_weapon(name, href, weap_type):
     elif 'Damage Reduction %' in gen_stats:
         weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage Reduction %"], 'damage')
         del gen_stats['Damage Reduction %']
+    elif 'Damage Reduction' in gen_stats:
+        weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage Reduction"], 'damage')
+        del gen_stats['Damage Reduction']
     else:
         weapon['damage_reduction'] = stats_breakdown('-/-/-/-', 'damage')
     
@@ -195,6 +213,10 @@ def scrape_weapon(name, href, weap_type):
         del gen_stats['Critical\nBonus']
     else:
         weapon['critical_bonus']: None
+
+    if 'Range' in gen_stats:
+        weapon['range'] = read_val(gen_stats['Range'])
+        del gen_stats['Range']
 
     del gen_stats['Name']
     if len(gen_stats):
@@ -257,10 +279,9 @@ def scrape_weapon_list(filename):
         weap_list = type_heading.find_next_sibling().find_all('a')
         for weap_tag in weap_list:
             name = weap_tag.string
-            if name == "Jagged Ghost Blade":
-                link = url_base + weap_tag['href']
-                total_weapon = scrape_weapon(name, link, type_title)
-                weapons['full_list'].append(total_weapon)
+            link = url_base + weap_tag['href']
+            total_weapon = scrape_weapon(name, link, type_title)
+            weapons['full_list'].append(total_weapon)
 
 if __name__ == "__main__":
     print("Init scraping")
