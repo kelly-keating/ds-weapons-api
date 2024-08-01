@@ -48,9 +48,9 @@ def get_table_data(elem):
     words = elem.get_text()
     if words != "":
         return words
-    child = elem.contents[0]
-    if child.name == 'img':
-        return child["src"]
+    pic = elem.find('img')
+    if pic != None:
+        return pic["src"]
     return None
 
 def digest_table(table_headings, table_data):
@@ -80,10 +80,17 @@ def stats_breakdown(str, stat_type):
     stats = list(map(read_val, str.split("/")))
     return dict(zip(keys[stat_type], stats))
 
+def zip_upgrades(keys, rows):
+    formatted_rows = []
+    for tr in rows:
+        data = map(lambda td: get_table_data(td), tr.find_all('td'))
+        formatted_rows.append(dict(zip(keys, data)))
+    return formatted_rows
+
 # ----- Scrapers -----
 
 def scrape_weapon(name, href, weap_type):
-    print("\tScraping weapon: " + name + " -- " + href)
+    # print("\tScraping weapon: " + name + " -- " + href)
 
     weapon = {
         'name': name,
@@ -180,7 +187,7 @@ def scrape_weapon(name, href, weap_type):
             stats_req, stats_bonus = ["",""]
         
         weapon['stats_required'] = stats_breakdown(stats_req, 'stats')
-        weapon['stats_bonus'] = [ stats_breakdown(stats_bonus, 'stats') ]
+        weapon['stats_bonus'] = stats_breakdown(stats_bonus, 'stats')
         del gen_stats["Stats Needed\nStat Bonuses"]
             
     else:
@@ -188,16 +195,16 @@ def scrape_weapon(name, href, weap_type):
         weapon['stats_bonus'] = None
 
     if 'Damage\nReduction %' in gen_stats:
-        weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage\nReduction %"], 'damage')
+        weapon['defense'] = stats_breakdown(gen_stats["Damage\nReduction %"], 'damage')
         del gen_stats['Damage\nReduction %']
     elif 'Damage Reduction %' in gen_stats:
-        weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage Reduction %"], 'damage')
+        weapon['defense'] = stats_breakdown(gen_stats["Damage Reduction %"], 'damage')
         del gen_stats['Damage Reduction %']
     elif 'Damage Reduction' in gen_stats:
-        weapon['damage_reduction'] = stats_breakdown(gen_stats["Damage Reduction"], 'damage')
+        weapon['defense'] = stats_breakdown(gen_stats["Damage Reduction"], 'damage')
         del gen_stats['Damage Reduction']
     else:
-        weapon['damage_reduction'] = stats_breakdown('-/-/-/-', 'damage')
+        weapon['defense'] = stats_breakdown('-/-/-/-', 'damage')
     
     if 'Aux Effects' in gen_stats:
         weapon['auxillary_effects'] = stats_breakdown(gen_stats["Aux Effects"], 'aux_effects')
@@ -224,7 +231,77 @@ def scrape_weapon(name, href, weap_type):
         print(gen_stats)
 
     #  Upgrade Info
+
+    upgrade_title = weapon_soup.find('h2', string='Upgrades') 
+    if upgrade_title == None:
+        return weapon
+
+    basic_upgrades_table =  upgrade_title.find_next('th', string='Name').parent.parent
+    upgrade_rows = list(filter(lambda x: x != '\n', basic_upgrades_table.contents))
+
+    upgrade_headings = list(map(lambda th: th.get_text(), upgrade_rows[0].find_all('th')))
+    upgrade_rows.pop(0)
+
+    expected = [
+        ['Name', 'Damage', 'Critical Bonus', 'Stat Bonuses', 'Demon Titanite', 'Souls'],
+        ['Name', 'Damage', 'Defense', 'Stat Bonuses', 'Materials Cost', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Damage\nReduction %', 'Stability', 'Demon Titanite', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Req. Material'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Upgrade Requirements', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Upgrade requirements', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Dragon Scale', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Demon Titanite'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Demon Titanite', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Twinkling Titanite'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Twinkling Titanite', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Shard', 'Large Shard', 'Chunk', 'Slab', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Shard', 'L. Shard', 'Chunk', 'Slab'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Shard', 'L. Shard', 'Chunk', 'Slab', 'Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Shard', 'L. Shard', 'Chunk', 'Slab', 'Frampt Souls'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Aux Effects', 'Upgrade Requirements'],
+        ['Name', 'Damage', 'Stat Bonuses', 'Aux Effects', 'Upgrade Requirements', 'Souls'],
+    ]
     
+    # keys_todo = [
+    #     'Demon Titanite', 'Souls', 
+    #     'Materials Cost', 'Souls', 
+    #     'Damage\nReduction %', 'Stability', 'Demon Titanite', 'Souls', 
+    #     'Req. Material', 
+    #     'Upgrade Requirements', 'Souls', 
+    #     'Upgrade requirements', 'Souls', 
+    #     'Dragon Scale', 'Souls', 
+    #     'Demon Titanite', 
+    #     'Demon Titanite', 'Souls', 
+    #     'Twinkling Titanite', 
+    #     'Twinkling Titanite', 'Souls', 
+    #     'Shard', 'Large Shard', 'Chunk', 'Slab', 'Souls', 
+    #     'Shard', 'L. Shard', 'Chunk', 'Slab', 
+    #     'Shard', 'L. Shard', 'Chunk', 'Slab', 'Souls', 
+    #     'Shard', 'L. Shard', 'Chunk', 'Slab', 'Frampt Souls', 
+    #     'Aux Effects', 'Upgrade Requirements', 
+    #     'Aux Effects', 'Upgrade Requirements', 'Souls'
+    # ]
+
+    if upgrade_headings not in expected:
+        print_err(name + ' has weird headings')
+        print(upgrade_headings)
+
+    upgrade_data = zip_upgrades(upgrade_headings, upgrade_rows)
+    # print(upgrade_data)
+
+    # bonuses = [None, None]
+
+    for obj in upgrade_data:
+        if '0' not in obj['Name'] or '+' in obj['Name']:
+            weapon['damage'].append(stats_breakdown(obj['Damage'], 'damage'))
+            # weapon['stats_bonus'].append(stats_breakdown(obj['Stat Bonuses'], 'stats'))
+            
+    #         if bonuses[0] == None:
+    #             bonuses[0] = obj['Stat Bonuses']
+    #         else:
+    #             bonuses[1] = obj['Stat Bonuses']
+
+    # print(bonuses)
 
     # # Upgrades
     # upgrades = {}
@@ -282,6 +359,11 @@ def scrape_weapon_list(filename):
             link = url_base + weap_tag['href']
             total_weapon = scrape_weapon(name, link, type_title)
             weapons['full_list'].append(total_weapon)
+            # if name == 'Black Bow of Pharis':
+            # if name == 'Caestus':
+            #     link = url_base + weap_tag['href']
+            #     total_weapon = scrape_weapon(name, link, type_title)
+            #     weapons['full_list'].append(total_weapon)
 
 if __name__ == "__main__":
     print("Init scraping")
